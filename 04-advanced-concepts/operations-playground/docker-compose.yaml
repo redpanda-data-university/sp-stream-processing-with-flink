@@ -1,0 +1,87 @@
+################################################################################
+#  Licensed to the Apache Software Foundation (ASF) under one
+#  or more contributor license agreements.  See the NOTICE file
+#  distributed with this work for additional information
+#  regarding copyright ownership.  The ASF licenses this file
+#  to you under the Apache License, Version 2.0 (the
+#  "License"); you may not use this file except in compliance
+#  with the License.  You may obtain a copy of the License at
+#
+#      http://www.apache.org/licenses/LICENSE-2.0
+#
+#  Unless required by applicable law or agreed to in writing, software
+#  distributed under the License is distributed on an "AS IS" BASIS,
+#  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+#  See the License for the specific language governing permissions and
+# limitations under the License.
+################################################################################
+
+version: "3.7"
+volumes:
+  redpanda: null
+  flink_data:
+services:
+  client:
+    build: ./ops-playground-image
+    image: flink-ops-playground:1-FLINK-1.16-scala_2.12
+    command: "flink run -d /opt/ClickCountJob.jar --bootstrap.servers redpanda:9092 --checkpointing --event-time"
+    depends_on:
+      - jobmanager
+      - redpanda
+    volumes:
+      - ./conf:/opt/flink/conf
+      - flink_data:/tmp/
+    environment:
+      - JOB_MANAGER_RPC_ADDRESS=jobmanager
+  clickevent-generator:
+    image: flink-ops-playground:1-FLINK-1.16-scala_2.12
+    command: "java -classpath /opt/ClickCountJob.jar:/opt/flink/lib/* org.apache.flink.playgrounds.ops.clickcount.ClickEventGenerator --bootstrap.servers redpanda:9092 --topic input"
+    depends_on:
+      - redpanda
+  jobmanager:
+    image: flink:1.16.0-scala_2.12-java11
+    command: "jobmanager.sh start-foreground"
+    ports:
+      - 8081:8081
+    volumes:
+      - ./conf:/opt/flink/conf
+      - flink_data:/tmp/
+    environment:
+      - JOB_MANAGER_RPC_ADDRESS=jobmanager
+  taskmanager:
+    image: flink:1.16.0-scala_2.12-java11
+    depends_on:
+      - jobmanager
+    command: "taskmanager.sh start-foreground"
+    volumes:
+      - ./conf:/opt/flink/conf
+      - flink_data:/tmp/
+    environment:
+      - JOB_MANAGER_RPC_ADDRESS=jobmanager
+  redpanda:
+    image: docker.redpanda.com/redpandadata/redpanda:v23.2.12
+    container_name: redpanda
+    command:
+      - redpanda start
+      - --smp 1
+      - --overprovisioned
+      - --kafka-addr internal://0.0.0.0:9092,external://0.0.0.0:19092
+      - --advertise-kafka-addr internal://redpanda:9092,external://localhost:19092
+      - --pandaproxy-addr internal://0.0.0.0:8082,external://0.0.0.0:18082
+      - --advertise-pandaproxy-addr internal://redpanda:8082,external://localhost:18082
+      - --schema-registry-addr internal://0.0.0.0:8081,external://0.0.0.0:18081
+      - --rpc-addr redpanda:33145
+      - --advertise-rpc-addr redpanda:33145
+    ports:
+      - 18081:18081
+      - 18082:18082
+      - 19092:19092
+      - 19644:9644
+    volumes:
+      - redpanda:/var/lib/redpanda/data
+    healthcheck:
+      test: [ "CMD-SHELL", "rpk cluster health | grep -E 'Healthy:.+true' || exit 1" ]
+      interval: 15s
+      timeout: 3s
+      retries: 5
+      start_period: 5s
